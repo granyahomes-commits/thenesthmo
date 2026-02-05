@@ -5,6 +5,7 @@
  import { MetricCard } from "@/components/investors/MetricCard";
  import { ScoreGauge } from "@/components/investors/ScoreGauge";
  import { PostcodeTable } from "@/components/investors/PostcodeTable";
+ import { AIInsightCard } from "@/components/investors/AIInsightCard";
  import { mockPostcodeMetrics } from "@/data/mockData";
  import { Button } from "@/components/ui/button";
  import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -173,6 +174,8 @@
  
              {/* Postcode Comparison Table */}
              <div className="lg:col-span-2">
+                <AIInsightCard metrics={selectedMetrics} />
+                <div className="mt-6">
                <Card>
                  <CardHeader>
                    <CardTitle>Compare Postcodes</CardTitle>
@@ -184,6 +187,7 @@
                    />
                  </CardContent>
                </Card>
+                </div>
              </div>
            </div>
  
