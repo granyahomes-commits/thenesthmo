@@ -1,5 +1,12 @@
- // Mock data for MVP demonstration
- // All data is fictional and for demonstration purposes only
+// Mock data for MVP demonstration
+// All data is fictional and for demonstration purposes only
+
+import room1Img from "@/assets/room-1.jpg";
+import room2Img from "@/assets/room-2.jpg";
+import room3Img from "@/assets/room-3.jpg";
+import room4Img from "@/assets/room-4.jpg";
+import room5Img from "@/assets/room-5.jpg";
+import room6Img from "@/assets/room-6.jpg";
  
  export interface Room {
    id: string;
@@ -41,7 +48,7 @@
      ensuite: false,
      roomType: "double",
      available: new Date("2024-02-15"),
-     images: ["/placeholder.svg"],
+    images: [room1Img],
      landlordId: "l1",
      status: "active",
      createdAt: new Date("2024-01-20"),
@@ -57,7 +64,7 @@
      ensuite: true,
      roomType: "double",
      available: new Date("2024-02-01"),
-     images: ["/placeholder.svg"],
+    images: [room2Img],
      landlordId: "l2",
      status: "active",
      createdAt: new Date("2024-01-15"),
@@ -73,7 +80,7 @@
      ensuite: false,
      roomType: "single",
      available: new Date("2024-02-10"),
-     images: ["/placeholder.svg"],
+    images: [room3Img],
      landlordId: "l3",
      status: "active",
      createdAt: new Date("2024-01-18"),
@@ -89,7 +96,7 @@
      ensuite: true,
      roomType: "large double",
      available: new Date("2024-03-01"),
-     images: ["/placeholder.svg"],
+    images: [room4Img],
      landlordId: "l1",
      status: "active",
      createdAt: new Date("2024-01-22"),
@@ -105,7 +112,7 @@
      ensuite: false,
      roomType: "double",
      available: new Date("2024-02-20"),
-     images: ["/placeholder.svg"],
+    images: [room5Img],
      landlordId: "l4",
      status: "active",
      createdAt: new Date("2024-01-25"),
@@ -121,7 +128,7 @@
      ensuite: false,
      roomType: "double",
      available: new Date("2024-02-08"),
-     images: ["/placeholder.svg"],
+     images: [room6Img],
      landlordId: "l5",
      status: "active",
      createdAt: new Date("2024-01-12"),
