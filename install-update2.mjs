@@ -1,0 +1,414 @@
+// install-update2.mjs
+// Run: node install-update2.mjs
+
+import fs from 'fs';
+import path from 'path';
+
+function writeFile(filePath, content) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(filePath, content, 'utf8');
+  console.log('  OK ' + filePath);
+}
+
+console.log('\n=== Installing HMO Hub Update 2 ===\n');
+
+// 1. RoomImageUpload.tsx
+writeFile('src/components/rooms/RoomImageUpload.tsx', String.raw`import { useState, useCallback, useRef } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
+import { ImagePlus, X, Loader2 } from "lucide-react";
+
+interface RoomImageUploadProps {
+  roomIndex: number;
+  images: string[];
+  onImagesChange: (urls: string[]) => void;
+  maxImages?: number;
+}
+
+export function RoomImageUpload({ roomIndex, images, onImagesChange, maxImages = 5 }: RoomImageUploadProps) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const uploadImage = useCallback(async (file: File) => {
+    if (!user) return null;
+    if (!file.type.startsWith("image/")) { toast({ title: "Invalid file", description: "Please upload JPG, PNG or WebP", variant: "destructive" }); return null; }
+    if (file.size > 5 * 1024 * 1024) { toast({ title: "File too large", description: "Max 5MB", variant: "destructive" }); return null; }
+    const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const fileName = ` + "`${user.id}/${Date.now()}-${Math.random().toString(36).slice(2,8)}.${ext}`" + String.raw`;
+    const { data, error } = await supabase.storage.from("room-images").upload(fileName, file, { cacheControl: "3600", upsert: false });
+    if (error) { toast({ title: "Upload failed", description: error.message, variant: "destructive" }); return null; }
+    const { data: urlData } = supabase.storage.from("room-images").getPublicUrl(data.path);
+    return urlData.publicUrl;
+  }, [user, toast]);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    const remaining = maxImages - images.length;
+    if (remaining <= 0) return;
+    setUploading(true);
+    const newUrls: string[] = [];
+    for (const file of files.slice(0, remaining)) { const url = await uploadImage(file); if (url) newUrls.push(url); }
+    if (newUrls.length > 0) { onImagesChange([...images, ...newUrls]); toast({ title: "Uploaded", description: ` + "`${newUrls.length} image(s) added`" + String.raw` }); }
+    setUploading(false);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const removeImage = async (index: number) => {
+    const url = images[index];
+    const p = url.split("/room-images/")[1];
+    if (p) await supabase.storage.from("room-images").remove([p]);
+    onImagesChange(images.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div>
+      <label className="text-sm font-medium mb-2 block">Room Photos ({images.length}/{maxImages})</label>
+      {images.length > 0 && (
+        <div className="flex gap-2 mb-3 flex-wrap">
+          {images.map((url, index) => (
+            <div key={url} className="relative w-24 h-24 rounded-lg overflow-hidden border border-border group">
+              <img src={url} alt={` + "`Room photo ${index + 1}`" + String.raw`} className="w-full h-full object-cover" />
+              <button type="button" onClick={() => removeImage(index)} className="absolute top-1 right-1 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><X size={12} /></button>
+              {index === 0 && <span className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] text-center py-0.5">Main</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {images.length < maxImages && (
+        <div className="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-accent/50 hover:bg-accent/5 transition-colors" onClick={() => fileInputRef.current?.click()}>
+          <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={handleFileSelect} className="hidden" />
+          {uploading ? (
+            <div className="flex items-center justify-center gap-2 py-2"><Loader2 className="animate-spin text-accent" size={20} /><span className="text-sm text-muted-foreground">Uploading...</span></div>
+          ) : (
+            <div className="flex flex-col items-center gap-1 py-2"><ImagePlus className="text-muted-foreground" size={24} /><span className="text-sm text-muted-foreground">Click or drag photos here</span><span className="text-xs text-muted-foreground">JPG, PNG or WebP — Max 5MB</span></div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+`);
+
+// 2. RoomCard.tsx - works with real data
+writeFile('src/components/rooms/RoomCard.tsx', String.raw`import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { MapPin, Bath, Calendar, Zap, Home, Sofa } from "lucide-react";
+
+interface RoomData {
+  id: string;
+  title: string | null;
+  room_type: string;
+  rent_pcm: number;
+  bills_included: boolean;
+  ensuite: boolean;
+  furnished: boolean;
+  available_from: string | null;
+  city: string;
+  postcode: string;
+  images: string[];
+}
+
+interface RoomCardProps {
+  room: RoomData;
+  onEnquire: (roomId: string) => void;
+}
+
+const roomTypeLabel: Record<string, string> = { single: "Single", double: "Double", large_double: "Large Double", ensuite: "Ensuite", "large double": "Large Double" };
+
+export function RoomCard({ room, onEnquire }: RoomCardProps) {
+  const hasImage = room.images && room.images.length > 0;
+  const displayDate = room.available_from ? new Date(room.available_from).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "Now";
+
+  return (
+    <Card className="group overflow-hidden hover:shadow-soft transition-all duration-300 border-border hover:border-accent/30">
+      <div className="aspect-video bg-secondary relative overflow-hidden">
+        {hasImage ? (
+          <img src={room.images[0]} alt={room.title || ` + "`Room in ${room.city}`" + String.raw`} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center bg-secondary/80"><Home className="text-muted-foreground mb-2" size={32} /><span className="text-xs text-muted-foreground">No photo yet</span></div>
+        )}
+        <div className="absolute top-3 left-3 flex gap-2">
+          <Badge className="bg-primary text-primary-foreground">{roomTypeLabel[room.room_type] || room.room_type}</Badge>
+          {room.ensuite && <Badge variant="secondary" className="bg-accent/90 text-accent-foreground"><Bath size={12} className="mr-1" /> Ensuite</Badge>}
+        </div>
+      </div>
+      <CardContent className="p-4">
+        <div className="flex justify-between items-start mb-3">
+          <div>
+            <h3 className="font-semibold text-lg">£{Math.round(room.rent_pcm)}<span className="text-muted-foreground text-sm font-normal">/month</span></h3>
+            <div className="flex gap-2 mt-1">
+              {room.bills_included && <span className="text-xs text-success flex items-center gap-1"><Zap size={12} /> Bills included</span>}
+              {room.furnished && <span className="text-xs text-muted-foreground flex items-center gap-1"><Sofa size={12} /> Furnished</span>}
+            </div>
+          </div>
+        </div>
+        {room.title && <p className="text-sm font-medium mb-2">{room.title}</p>}
+        <div className="flex items-center gap-1 text-muted-foreground text-sm mb-2"><MapPin size={14} /><span>{room.city}, {room.postcode}</span></div>
+        <div className="flex items-center gap-1 text-muted-foreground text-sm mb-4"><Calendar size={14} /><span>Available {displayDate}</span></div>
+        <Button className="w-full bg-accent hover:bg-accent/90 text-accent-foreground" onClick={() => onEnquire(room.id)}>Enquire Now</Button>
+      </CardContent>
+    </Card>
+  );
+}
+`);
+
+// 3. useRooms.ts
+writeFile('src/hooks/useRooms.ts', String.raw`import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { useEventTracking } from "@/hooks/useEventTracking";
+
+export interface RoomListing {
+  id: string; title: string | null; room_type: string; rent_pcm: number;
+  bills_included: boolean; ensuite: boolean; furnished: boolean;
+  available_from: string | null; status: string; views_count: number;
+  enquiries_count: number; description: string | null; created_at: string;
+  property_id: string; address: string; city: string; postcode: string;
+  postcode_district: string; images: string[];
+}
+
+const PAGE_SIZE = 12;
+
+export function useRooms() {
+  const [rooms, setRooms] = useState<RoomListing[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [currentFilters, setCurrentFilters] = useState({ postcode: "", maxBudget: 1200, billsIncluded: null as boolean|null, ensuite: null as boolean|null, roomType: null as string|null, city: null as string|null });
+  const { trackSearch } = useEventTracking();
+
+  const fetchRooms = useCallback(async (filters: typeof currentFilters, pageNum: number, append = false) => {
+    setLoading(true); setError(null);
+    try {
+      let query = supabase.from("rooms")
+        .select(` + "`id, title, room_type, rent_pcm, bills_included, ensuite, furnished, available_from, status, views_count, enquiries_count, description, created_at, property_id, properties!inner(address_line_1, city, postcode, postcode_district, status)`" + String.raw`, { count: "exact" })
+        .eq("status", "available").eq("properties.status", "active")
+        .lte("rent_pcm", filters.maxBudget)
+        .order("created_at", { ascending: false })
+        .range(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE - 1);
+      if (filters.billsIncluded) query = query.eq("bills_included", true);
+      if (filters.ensuite) query = query.eq("ensuite", true);
+      if (filters.postcode) {
+        const s = filters.postcode.trim().toUpperCase();
+        query = query.or(` + "`postcode_district.ilike.%${s}%,city.ilike.%${s}%,postcode.ilike.%${s}%`" + String.raw`, { foreignTable: "properties" });
+      }
+      const { data, error: qErr, count } = await query;
+      if (qErr) throw qErr;
+      const transformed: RoomListing[] = (data || []).map((r: any) => ({
+        id: r.id, title: r.title, room_type: r.room_type, rent_pcm: r.rent_pcm,
+        bills_included: r.bills_included, ensuite: r.ensuite, furnished: r.furnished,
+        available_from: r.available_from, status: r.status, views_count: r.views_count,
+        enquiries_count: r.enquiries_count, description: r.description, created_at: r.created_at,
+        property_id: r.property_id, address: r.properties.address_line_1, city: r.properties.city,
+        postcode: r.properties.postcode, postcode_district: r.properties.postcode_district, images: [],
+      }));
+      if (transformed.length > 0) {
+        const ids = transformed.map(r => r.id);
+        const { data: imgs } = await supabase.from("room_images").select("room_id, image_url, display_order").in("room_id", ids).order("display_order");
+        if (imgs) { const m = new Map<string,string[]>(); for (const i of imgs) { const e = m.get(i.room_id)||[]; e.push(i.image_url); m.set(i.room_id,e); } for (const r of transformed) r.images = m.get(r.id)||[]; }
+      }
+      if (append) setRooms(p => [...p, ...transformed]); else setRooms(transformed);
+      setTotalCount(count || 0); setHasMore(transformed.length === PAGE_SIZE);
+      if (filters.postcode && pageNum === 0) trackSearch(filters.postcode.toUpperCase(), { maxBudget: filters.maxBudget, resultsCount: count||0 });
+    } catch (err: any) { setError(err.message || "Failed to load rooms"); } finally { setLoading(false); }
+  }, [trackSearch]);
+
+  useEffect(() => { fetchRooms(currentFilters, 0); }, []);
+  const search = useCallback(async (f: typeof currentFilters) => { setCurrentFilters(f); setPage(0); await fetchRooms(f, 0); }, [fetchRooms]);
+  const loadMore = useCallback(async () => { const n = page+1; setPage(n); await fetchRooms(currentFilters, n, true); }, [page, currentFilters, fetchRooms]);
+  return { rooms, loading, error, totalCount, search, loadMore, hasMore };
+}
+`);
+
+// 4. Rooms.tsx - real data
+writeFile('src/pages/Rooms.tsx', String.raw`import { useState } from "react";
+import { Navbar } from "@/components/layout/Navbar";
+import { Footer } from "@/components/layout/Footer";
+import { RoomCard } from "@/components/rooms/RoomCard";
+import { RoomFilters } from "@/components/rooms/RoomFilters";
+import { useRooms } from "@/hooks/useRooms";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { Search, SlidersHorizontal, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+
+export default function Rooms() {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState({ postcode: "", maxBudget: 800, billsIncluded: null as boolean|null, ensuite: null as boolean|null });
+  const { rooms, loading, error, totalCount, search, loadMore, hasMore } = useRooms();
+
+  const handleEnquire = (roomId: string) => {
+    if (!user) { toast({ title: "Sign in required", description: "Please sign in to send enquiries.", variant: "destructive" }); return; }
+    toast({ title: "Enquiry Submitted", description: "Your enquiry has been sent to the landlord." });
+  };
+  const handleSearch = () => { setMobileFiltersOpen(false); search({ postcode: filters.postcode, maxBudget: filters.maxBudget, billsIncluded: filters.billsIncluded, ensuite: filters.ensuite, roomType: null, city: null }); };
+  const handleClear = () => { const c = { postcode: "", maxBudget: 800, billsIncluded: null as boolean|null, ensuite: null as boolean|null }; setFilters(c); search({ ...c, roomType: null, city: null }); };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background">
+      <Navbar />
+      <section className="bg-primary text-primary-foreground py-12"><div className="container mx-auto px-4"><div className="max-w-2xl"><h1 className="text-3xl md:text-4xl font-bold mb-4">Find Your Perfect HMO Room</h1><p className="text-primary-foreground/80">Browse verified rooms across the UK. Every tenant on The Nest is verified.</p></div></div></section>
+      <section className="flex-1 py-8"><div className="container mx-auto px-4"><div className="flex gap-8">
+        <aside className="hidden lg:block w-80 flex-shrink-0"><div className="sticky top-24"><RoomFilters filters={filters} onFilterChange={setFilters} onSearch={handleSearch} onClear={handleClear} /></div></aside>
+        <div className="flex-1">
+          <div className="flex items-center justify-between mb-6">
+            <p className="text-muted-foreground">{loading ? <span className="flex items-center gap-2"><Loader2 className="animate-spin" size={16} />Searching...</span> : <><span className="font-semibold text-foreground">{totalCount}</span> rooms found</>}</p>
+            <Sheet open={mobileFiltersOpen} onOpenChange={setMobileFiltersOpen}><SheetTrigger asChild><Button variant="outline" className="lg:hidden"><SlidersHorizontal size={18} className="mr-2" />Filters</Button></SheetTrigger><SheetContent side="left" className="w-full sm:max-w-md"><SheetHeader><SheetTitle>Search Filters</SheetTitle></SheetHeader><div className="mt-6"><RoomFilters filters={filters} onFilterChange={setFilters} onSearch={handleSearch} onClear={handleClear} /></div></SheetContent></Sheet>
+          </div>
+          {!loading && !error && rooms.length > 0 ? (
+            <><div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-6">{rooms.map(room => <RoomCard key={room.id} room={room} onEnquire={handleEnquire} />)}</div>
+            {hasMore && <div className="text-center mt-8"><Button variant="outline" onClick={loadMore} disabled={loading}>Load More</Button></div>}</>
+          ) : !loading && !error ? (
+            <div className="text-center py-16"><Search className="mx-auto text-muted-foreground mb-4" size={48} /><h3 className="text-lg font-semibold mb-2">No rooms found</h3><p className="text-muted-foreground mb-4">{filters.postcode ? "Try a different area or adjust your filters." : "No rooms listed yet."}</p>{filters.postcode && <Button variant="outline" onClick={handleClear}>Clear filters</Button>}</div>
+          ) : null}
+        </div>
+      </div></div></section>
+      <Footer />
+    </div>
+  );
+}
+`);
+
+// 5. AddProperty.tsx - with image upload
+writeFile('src/pages/AddProperty.tsx', String.raw`import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Navbar } from "@/components/layout/Navbar";
+import { Footer } from "@/components/layout/Footer";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { useEventTracking } from "@/hooks/useEventTracking";
+import { supabase } from "@/integrations/supabase/client";
+import { RoomImageUpload } from "@/components/rooms/RoomImageUpload";
+import { Building2, Plus, ArrowLeft, MapPin } from "lucide-react";
+
+interface RoomForm { room_type: string; rent_pcm: string; bills_included: boolean; ensuite: boolean; furnished: boolean; images: string[]; }
+
+export default function AddProperty() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const { trackListingCreated } = useEventTracking();
+  const [loading, setLoading] = useState(false);
+  const [postcodeValid, setPostcodeValid] = useState<boolean | null>(null);
+  const [property, setProperty] = useState({ address_line_1: "", address_line_2: "", city: "", postcode: "", property_type: "", total_rooms: 1, bathrooms: 1, hmo_licence_number: "", article_4_area: false, description: "" });
+  const [rooms, setRooms] = useState<RoomForm[]>([{ room_type: "double", rent_pcm: "", bills_included: false, ensuite: false, furnished: true, images: [] }]);
+
+  const validatePostcode = async (pc: string) => {
+    if (pc.length < 5) return;
+    try { const r = await fetch(` + "`https://api.postcodes.io/postcodes/${encodeURIComponent(pc)}`" + String.raw`); const d = await r.json();
+      if (d.status === 200) { setPostcodeValid(true); if (d.result.admin_district && !property.city) setProperty(p => ({...p, city: d.result.admin_district})); } else setPostcodeValid(false);
+    } catch { setPostcodeValid(null); }
+  };
+
+  const addRoom = () => setRooms([...rooms, { room_type: "double", rent_pcm: "", bills_included: false, ensuite: false, furnished: true, images: [] }]);
+  const updateRoom = (i: number, field: string, value: unknown) => { const u = [...rooms]; (u[i] as any)[field] = value; setRooms(u); };
+  const removeRoom = (i: number) => { if (rooms.length > 1) setRooms(rooms.filter((_,idx) => idx !== i)); };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault(); if (!user) return;
+    if (!postcodeValid) { toast({ title: "Invalid postcode", variant: "destructive" }); return; }
+    setLoading(true);
+    try {
+      const clean = property.postcode.trim().toUpperCase();
+      const district = clean.split(" ")[0] || clean;
+      const area = district.replace(/[0-9]/g, "");
+      const { data: propData, error: propError } = await supabase.from("properties").insert({
+        landlord_id: user.id, address_line_1: property.address_line_1, address_line_2: property.address_line_2 || null,
+        city: property.city, postcode: clean, postcode_district: district, postcode_area: area,
+        total_rooms: rooms.length, bathrooms: property.bathrooms, property_type: property.property_type || null,
+        hmo_licence_number: property.hmo_licence_number || null, article_4_area: property.article_4_area, status: "active",
+      }).select().single();
+      if (propError) throw propError;
+      const valid = rooms.filter(r => r.rent_pcm);
+      for (let i = 0; i < valid.length; i++) {
+        const r = valid[i];
+        const { data: roomData, error: roomErr } = await supabase.from("rooms").insert({
+          property_id: propData.id, landlord_id: user.id, title: ` + "`Room ${i+1} - ${r.room_type.replace('_',' ')}`" + String.raw`,
+          room_type: r.room_type, rent_pcm: parseFloat(r.rent_pcm), bills_included: r.bills_included,
+          ensuite: r.ensuite, furnished: r.furnished, status: "available",
+        }).select().single();
+        if (roomErr) throw roomErr;
+        if (r.images.length > 0 && roomData) {
+          await supabase.from("room_images").insert(r.images.map((url, idx) => ({ room_id: roomData.id, image_url: url, display_order: idx })));
+        }
+      }
+      trackListingCreated(propData.id, district, valid.length);
+      toast({ title: "Property listed!", description: ` + "`${property.address_line_1} with ${valid.length} room(s) is now live.`" + String.raw` });
+      navigate("/dashboard");
+    } catch (err: any) { toast({ title: "Error", description: err.message, variant: "destructive" }); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col bg-background">
+      <Navbar />
+      <section className="bg-primary text-primary-foreground py-8"><div className="container mx-auto px-4">
+        <Button variant="ghost" className="text-primary-foreground/70 hover:text-primary-foreground mb-4 -ml-2" onClick={() => navigate("/dashboard")}><ArrowLeft size={18} className="mr-1" /> Back to Dashboard</Button>
+        <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-3"><Building2 className="text-accent" size={28} />Add New Property</h1>
+      </div></section>
+      <section className="flex-1 py-8"><div className="container mx-auto px-4 max-w-3xl">
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <Card><CardHeader><CardTitle>Property Details</CardTitle></CardHeader><CardContent className="space-y-4">
+            <div><Label>Address Line 1 *</Label><Input placeholder="e.g. 12 Victoria Street" value={property.address_line_1} onChange={e => setProperty({...property, address_line_1: e.target.value})} required className="mt-1" /></div>
+            <div><Label>Address Line 2</Label><Input placeholder="Optional" value={property.address_line_2} onChange={e => setProperty({...property, address_line_2: e.target.value})} className="mt-1" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label>Postcode *</Label><div className="relative mt-1"><MapPin className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} /><Input placeholder="e.g. SL1 3AA" value={property.postcode} onChange={e => { setProperty({...property, postcode: e.target.value}); setPostcodeValid(null); }} onBlur={() => validatePostcode(property.postcode)} className={` + "`pl-10 ${postcodeValid === true ? 'border-green-500' : postcodeValid === false ? 'border-red-500' : ''}`" + String.raw`} required /></div>{postcodeValid === false && <p className="text-xs text-destructive mt-1">Invalid postcode</p>}</div>
+              <div><Label>City *</Label><Input placeholder="Auto-filled" value={property.city} onChange={e => setProperty({...property, city: e.target.value})} required className="mt-1" /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><Label>Property Type</Label><Select value={property.property_type} onValueChange={v => setProperty({...property, property_type: v})}><SelectTrigger className="mt-1"><SelectValue placeholder="Select" /></SelectTrigger><SelectContent><SelectItem value="terraced">Terraced</SelectItem><SelectItem value="semi">Semi-Detached</SelectItem><SelectItem value="detached">Detached</SelectItem><SelectItem value="flat">Flat</SelectItem></SelectContent></Select></div>
+              <div><Label>Bathrooms</Label><Input type="number" min={1} value={property.bathrooms} onChange={e => setProperty({...property, bathrooms: parseInt(e.target.value)||1})} className="mt-1" /></div>
+            </div>
+            <div><Label>HMO Licence Number</Label><Input placeholder="Optional" value={property.hmo_licence_number} onChange={e => setProperty({...property, hmo_licence_number: e.target.value})} className="mt-1" /></div>
+            <div className="flex items-center justify-between py-2"><Label className="cursor-pointer">Article 4 Area</Label><Switch checked={property.article_4_area} onCheckedChange={c => setProperty({...property, article_4_area: c})} /></div>
+          </CardContent></Card>
+
+          <Card><CardHeader><div className="flex items-center justify-between"><CardTitle>Rooms ({rooms.length})</CardTitle><Button type="button" variant="outline" size="sm" onClick={addRoom}><Plus size={16} className="mr-1" /> Add Room</Button></div></CardHeader>
+          <CardContent className="space-y-6">
+            {rooms.map((room, index) => (
+              <div key={index} className="p-4 rounded-lg border border-border space-y-4">
+                <div className="flex items-center justify-between"><span className="text-sm font-medium">Room {index + 1}</span>{rooms.length > 1 && <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => removeRoom(index)}>Remove</Button>}</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div><Label>Room Type</Label><Select value={room.room_type} onValueChange={v => updateRoom(index, "room_type", v)}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="single">Single</SelectItem><SelectItem value="double">Double</SelectItem><SelectItem value="large_double">Large Double</SelectItem><SelectItem value="ensuite">Ensuite</SelectItem></SelectContent></Select></div>
+                  <div><Label>Monthly Rent (£) *</Label><Input type="number" min={100} placeholder="550" value={room.rent_pcm} onChange={e => updateRoom(index, "rent_pcm", e.target.value)} required className="mt-1" /></div>
+                </div>
+                <div className="flex gap-6">
+                  <div className="flex items-center gap-2"><Switch checked={room.bills_included} onCheckedChange={v => updateRoom(index, "bills_included", v)} /><Label className="text-sm">Bills included</Label></div>
+                  <div className="flex items-center gap-2"><Switch checked={room.ensuite} onCheckedChange={v => updateRoom(index, "ensuite", v)} /><Label className="text-sm">Ensuite</Label></div>
+                  <div className="flex items-center gap-2"><Switch checked={room.furnished} onCheckedChange={v => updateRoom(index, "furnished", v)} /><Label className="text-sm">Furnished</Label></div>
+                </div>
+                <RoomImageUpload roomIndex={index} images={room.images} onImagesChange={urls => updateRoom(index, "images", urls)} maxImages={5} />
+              </div>
+            ))}
+          </CardContent></Card>
+
+          <div className="flex gap-3 justify-end">
+            <Button type="button" variant="outline" onClick={() => navigate("/dashboard")}>Cancel</Button>
+            <Button type="submit" className="bg-accent hover:bg-accent/90 text-accent-foreground" disabled={loading}>{loading ? "Creating..." : "List Property"}</Button>
+          </div>
+        </form>
+      </div></section>
+      <Footer />
+    </div>
+  );
+}
+`);
+
+console.log('\n=== All 5 files installed successfully! ===');
+console.log('Now run: npm run dev\n');
